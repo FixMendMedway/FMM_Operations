@@ -1,36 +1,40 @@
-# FMM Operations v2.4
+# FMM Operations v2.5 — safer OneDrive sync
 
-A browser-based, local-first operations application for Fix & Mend Medway: quotations, editable Groups, labour and material budgets, converting quotes into projects, Gantt planning, resources, cashflow, readiness and a retrievable archive.
+FMM Operations is the Fix & Mend Medway browser application for quotations, editable Groups, itemised labour/material budgets, quote conversion, Gantt schedules, resources, cashflow, readiness and a retrievable project archive.
 
-## Security
+## Privacy and deployment
 
-**This repository contains application code only.** Do not upload business JSON backups, client data, exported spreadsheets, documents, tokens or Microsoft client secrets. Your live data belongs in your private OneDrive account using the in-app OneDrive sync.
+- **GitHub Pages hosts application code only.** Do not upload private JSON backups, client records, spreadsheets, receipts, Microsoft credentials or tokens to this public repository.
+- Business data remains in the authenticated user's private **OneDrive app folder** or their local browser draft. The code is built as a single `index.html` file.
+- The website is https://fixmendmedway.github.io/FMM_Operations/. Its address is also the Azure Entra SPA redirect URI.
 
-## Hosting on GitHub Pages
+## Upgrade from v2.4 (important)
 
-1. In repository **Settings → Pages**, set **Deploy from a branch**, **main**, **/(root)**.
-2. When GitHub Pages provides your HTTPS website address, use that exact address in your Microsoft Entra single-page application (SPA) registration as the redirect URI.
-3. A free GitHub plan generally needs the repository to be **public** to use GitHub Pages. This repository is currently private. If you want free Pages hosting, change its visibility only after confirming the code contains no private data; never publish your JSON backups.
+1. In v2.4, select **Backup all** and save a dated local JSON backup, especially before refreshing the website on another computer.
+2. Refresh the GitHub Pages app and confirm the sidebar shows **V2.5**. Existing local browser data and the Microsoft Application ID remain stored under the same browser keys.
+3. **First-time setup in each browser:** open **OneDrive sync** and **Load OneDrive copy** to establish a trusted cloud baseline. If that browser has newer *unsynchronised* data, back it up before replacing it; reconcile those changes first.
+4. Test **Save to OneDrive**, followed by **Check OneDrive** in a second browser. Once both load the expected data, you can enable **Automatically upload changes** if you wish.
+5. Do not edit the same company data on two browsers simultaneously. Conflicts are blocked and require choosing a master copy or manually reconciling backups.
 
-## Microsoft OneDrive cloud sync
+## v2.5 improvements
 
-1. Create an app registration at https://entra.microsoft.com, allowing the Microsoft account type you actually use for OneDrive.
-2. Add the **Single-page application** platform and the exact GitHub Pages URL as the redirect URI.
-3. Add delegated **Microsoft Graph Files.ReadWrite.AppFolder** permissions; do **not** create or embed a client secret.
-4. Copy the public Application (client) ID to **OneDrive sync** in FMM Operations and sign in.
-5. Export a local JSON backup before the first cloud save. Load your existing jobs from a private backup, **Save to OneDrive**, then use **Load from OneDrive** on any other signed-in device.
+- **Session recovery:** OAuth token renewal using a session-scoped Microsoft refresh token; re-sign-in does not discard the last trusted cloud version.
+- **Safe cloud baseline:** OneDrive version ETag, app-folder identity and SHA-256 fingerprint of the last saved company data persisted as non-secret metadata in local browser storage.
+- **Automatic checks:** approximately once per minute while signed in, and when the application regains focus.
+- **Safe automatic download:** only when the cloud has changed and the browser has no outstanding edits or active form being edited.
+- **Conflict protection:** local and remote changes in parallel block uploads; an in-app review gives both backup options and guarded master-copy selection.
+- **Conditional saves:** matching OneDrive ETags required to update an existing file. A 409/412 server conflict is treated as unsafe to overwrite.
+- **Clear status:** cloud saved, local changes not uploaded, sign-in required, newer cloud copy available, or conflict.
 
-The browser stores a local draft. Cross-device sharing uses a single private OneDrive JSON snapshot, not simultaneous multi-user collaboration. If the cloud version changes elsewhere, the app prevents overwriting it until you resolve the conflict. Save regular backups.
+## Technical limits
 
-## Features and exports
+- This remains a **local-first single-user system**, not multi-user real-time collaboration. Cloud versions are not automatically merged.
+- Browser session refresh tokens expire after roughly 24 hours; a new sign-in can still be required. Tokens are not placed in GitHub or persistent localStorage.
+- The first v2.5 launch needs a deliberate **Load from OneDrive** if it does not already have a v2.5 trusted baseline.
+- Keep regular full JSON/ZIP backups separate from GitHub.
+- Automated browser QA used mocked Microsoft Graph/OAuth endpoints, not a real user sign-in. Check the sync status after every first live save.
 
-- Live itemised pricing with editable Group names, cost rates, markups, labour/material splits and stock-material tracking.
-- Quotation to active project conversion, linked project Gantt phases and a searchable completed-project archive.
-- Internal cost report and client quotation print/PDF layouts; client copies omit internal costs and profit.
-- Full JSON and ZIP exports, CSV quotation cost lines, and project/Gantt print views.
+## Rollback
 
-## Testing and limitations
+The pre-upgrade code is preserved at branch `backup/v2.4-pre-sync-upgrade`. The v2.5 release is on `main`.
 
-Automated browser checks covered navigation, a nine-project backup import, quote conversion, Group editing, stock accounting, archives, and exports. Print tests covered multi-page client/internal quotations and a Gantt report. Microsoft Graph integration was tested with a mock; **a real Microsoft sign-in and save/load must still be verified** after Azure registration.
-
-Released 4 November 2026. Use one editing device at a time until a multi-user backend exists.
