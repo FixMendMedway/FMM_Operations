@@ -1,0 +1,12 @@
+# Protect FMM client and company information
+*.json
+*.csv
+*.xlsx
+*.xls
+*.pdf
+*.zip
+*Backup*
+*backup*
+.env
+.env.*
+*.log
