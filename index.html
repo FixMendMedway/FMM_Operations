@@ -31,7 +31,7 @@
 @media(max-width:950px){.fmm-filter{align-items:stretch;flex-direction:column}.fmm-filter .row{flex-wrap:wrap}.fmm-items{min-width:1600px}}
 @media print{.fmm-items{font-size:8px}.fmm-items td{padding:3px!important}}
 
-</style><style>
+.fmm-cloud-status[data-kind="warn"]{background:#fff3e4;border-color:#e8cfab;color:#7a521e}.fmm-cloud-buttons .btn{white-space:normal}</style><style>
 /* Compact spreadsheet-like entry retains existing Operations colour palette. */
 .fmm-edit-help{margin:10px 17px;font-size:12px;color:#566a70;line-height:1.55}
 .fmm-gridwrap{max-width:100%;overflow:auto;scrollbar-gutter:stable;}
@@ -1089,145 +1089,304 @@ restoreDraft();render();
 
 render();if(!startupWarning)save();else{$('#saveState').textContent='⚠ Recovery needed';$('#saveState').className='pill bad';toast(startupWarning)}
 
-/* FMM Operations v2.3 - hosted app + private OneDrive app-folder sync.
-   No access tokens, secrets, quotations, projects, or JSON backups belong in GitHub source. */
+/* FMM Operations v2.5 — safe OneDrive monitoring and session recovery.
+   Code only: no customer data, API tokens or company backups belong in GitHub. */
 const FMM_GITHUB_REPO='https://github.com/FixMendMedway/FMM_Operations';
 const FMM_CLOUD_CONFIG='fmm-cloud-v1-settings';
 const FMM_CLOUD_FILE='FMM_Operations_Private_Data.json';
-let fmmCloud={clientId:'',auto:false,token:'',expires:0,etag:null,filename:FMM_CLOUD_FILE,working:false,pending:false,timer:0,dirty:false,lastPushed:''};
-try{let c=JSON.parse(localStorage.getItem(FMM_CLOUD_CONFIG)||'{}');if(typeof c.clientId==='string')fmmCloud.clientId=c.clientId;if(c.auto===true)fmmCloud.auto=true;}catch(e){}
-function fmmCloudSetState(message='',kind='neutral'){
- const n=document.querySelector('#fmmCloudState');if(!n)return;
- let msg=message||((fmmCloud.token&&Date.now()<fmmCloud.expires)?(fmmCloud.dirty?'OneDrive: local changes':'OneDrive: signed in'):'OneDrive: not connected');
- n.textContent=msg;n.dataset.kind=kind;
- n.title='Cloud data is private to your Microsoft account. GitHub hosts only the application, not your project records.';
-}
+const FMM_CLOUD_BASELINE='fmm-cloud-v2-baseline';
+const FMM_CLOUD_SESSION='fmm-cloud-v2-auth-session';
+const FMM_CLOUD_SCOPES='Files.ReadWrite.AppFolder offline_access';
+const FMM_CLOUD_AUTH_URL='https://login.microsoftonline.com/consumers/oauth2/v2.0/token';
+let fmmCloud={clientId:'',auto:false,autoLoad:true,token:'',refreshToken:'',expires:0,etag:null,
+ folderId:'',baseline:null,filename:FMM_CLOUD_FILE,working:false,pending:false,timer:0,
+ dirty:false,conflict:false,tabConflict:false,remote:null,lastPushed:'',refreshPromise:null,checkAfterUpload:false};
+try{const c=JSON.parse(localStorage.getItem(FMM_CLOUD_CONFIG)||'{}');
+ if(typeof c.clientId==='string')fmmCloud.clientId=c.clientId;
+ if(c.auto===true)fmmCloud.auto=true;if(c.autoLoad===false)fmmCloud.autoLoad=false;
+}catch(e){}
+try{const b=JSON.parse(localStorage.getItem(FMM_CLOUD_BASELINE)||'null');
+ if(b&&b.clientId===fmmCloud.clientId&&b.folderId&&b.etag&&b.hash)fmmCloud.baseline=b;
+}catch(e){}
+try{const a=JSON.parse(sessionStorage.getItem(FMM_CLOUD_SESSION)||'null');
+ if(a&&a.clientId===fmmCloud.clientId&&a.redirect===location.origin+location.pathname){
+  fmmCloud.token=a.token||'';fmmCloud.refreshToken=a.refreshToken||'';fmmCloud.expires=+a.expires||0;
+ }
+}catch(e){}
 function fmmCloudRedirect(){return location.origin+location.pathname;}
 function fmmCloudCanConnect(){return location.protocol==='https:'||(location.hostname==='localhost'&&location.protocol==='http:');}
-function fmmCloudSaveConfig(){localStorage.setItem(FMM_CLOUD_CONFIG,JSON.stringify({clientId:fmmCloud.clientId,auto:fmmCloud.auto}));}
+function fmmCloudSaveConfig(){localStorage.setItem(FMM_CLOUD_CONFIG,JSON.stringify({clientId:fmmCloud.clientId,auto:fmmCloud.auto,autoLoad:fmmCloud.autoLoad}));}
+function fmmCloudSaveSession(){try{if(fmmCloud.token||fmmCloud.refreshToken)sessionStorage.setItem(FMM_CLOUD_SESSION,JSON.stringify({clientId:fmmCloud.clientId,redirect:fmmCloudRedirect(),token:fmmCloud.token,refreshToken:fmmCloud.refreshToken,expires:fmmCloud.expires}));else sessionStorage.removeItem(FMM_CLOUD_SESSION);}catch(e){}}
+function fmmCloudSaveBaseline(folderId,etag,hash){
+ const b={clientId:fmmCloud.clientId,folderId,etag,hash,at:new Date().toISOString()};
+ fmmCloud.baseline=b;fmmCloud.folderId=folderId;fmmCloud.etag=etag;
+ try{localStorage.setItem(FMM_CLOUD_BASELINE,JSON.stringify(b));}catch(e){}
+}
+function fmmCloudStatusText(){
+ if(fmmCloud.tabConflict)return ['Another tab changed local data · reload before editing','warn'];
+ if(fmmCloud.conflict)return ['OneDrive conflict · action required','warn'];
+ if(!fmmCloud.token&&!fmmCloud.refreshToken)return ['OneDrive: sign in required','warn'];
+ if(!fmmCloud.baseline)return ['OneDrive: load to establish baseline','warn'];
+ if(fmmCloud.dirty)return ['OneDrive: local edits not uploaded','warn'];
+ if(fmmCloud.remote&&fmmCloud.remote.newer)return ['OneDrive: newer cloud data available','warn'];
+ if(fmmCloud.etag)return ['OneDrive: saved & up to date','ok'];
+ return ['OneDrive: check connection','neutral'];
+}
+function fmmCloudSetState(message='',kind='neutral'){
+ const n=document.querySelector('#fmmCloudState');if(!n)return;
+ const [fallback,k]=fmmCloudStatusText();n.textContent=message||fallback;n.dataset.kind=message?kind:k;
+ n.title='Business records are in your private OneDrive app folder. Cloud status is separate from local browser saving.';
+}
 function fmmCloudModal(){
  const ready=!!fmmCloud.token&&Date.now()<fmmCloud.expires;
- const linked=!!fmmCloud.etag;
- const address=fmmCloudRedirect();
- modal('OneDrive sync & GitHub publishing',`<div class="fmm-cloud-help">
-  <strong>GitHub = application code. OneDrive = private business data.</strong>
-  <p>The app remains usable offline. Online, sign in with Microsoft to load your company data on another computer or browser. No password, client secret or GitHub token is stored in this app.</p>
-  <p><a href="${FMM_GITHUB_REPO}" target="_blank" rel="noopener noreferrer">Open FMM_Operations repository</a> · <a href="https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank" rel="noopener noreferrer">Microsoft app registrations</a></p>
+ const b=fmmCloud.baseline;
+ const status=fmmCloudStatusText()[0];
+ modal('OneDrive sync · secure company data',`<div class="fmm-cloud-help">
+  <strong>GitHub hosts the application. OneDrive stores your private company records.</strong>
+  <p>Each browser keeps a local draft. OneDrive checks for another device's changes before uploading. Automatic download occurs only when this browser has no outstanding edits.</p>
+  <p><a href="${FMM_GITHUB_REPO}" target="_blank" rel="noopener noreferrer">GitHub repository</a> · <a href="https://entra.microsoft.com" target="_blank" rel="noopener noreferrer">Microsoft Entra</a></p>
  </div>
  <div class="formgrid">
-  <label class="field span2"><span>Microsoft Entra Application (client) ID — public identifier only</span><input type="text" name="clientId" value="${E(fmmCloud.clientId)}" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="off"></label>
-  <label class="field span2"><span>Required SPA redirect URL (copy into your Entra registration)</span><input type="text" readonly value="${E(address)}" id="fmmCloudRedirect"></label>
-  <label class="filtercheck span2"><input type="checkbox" name="auto" ${fmmCloud.auto?'checked':''}> Automatically upload after edits, once the cloud copy has first been loaded or created successfully</label>
+  <label class="field span2"><span>Microsoft Entra Application (client) ID</span><input type="text" name="clientId" value="${E(fmmCloud.clientId)}" autocomplete="off"></label>
+  <label class="field span2"><span>Registered SPA redirect address</span><input type="text" readonly value="${E(fmmCloudRedirect())}"></label>
+  <label class="filtercheck span2"><input type="checkbox" name="auto" ${fmmCloud.auto?'checked':''}> Automatically upload changes after editing (only when the OneDrive version is trusted)</label>
+  <label class="filtercheck span2"><input type="checkbox" name="autoLoad" ${fmmCloud.autoLoad?'checked':''}> Automatically load newer OneDrive data when this browser has no outstanding changes</label>
  </div>
- <div class="note ${ready?'':'warning'}"><strong>Cloud connection:</strong> ${ready?'Signed in until this session expires.':fmmCloudCanConnect()?'Not signed in. Set the application ID, save settings and select Sign in.':'Host index.html via GitHub Pages (HTTPS) before signing in.'}<br><strong>Cloud version:</strong> ${linked?'A cloud version has been loaded/saved in this session.':'No trusted cloud baseline in this browser session.'}<br><strong>Auto upload:</strong> ${fmmCloud.auto?'On (with conflict checks)':'Off'}</div>
+ <div class="note ${fmmCloud.conflict?'warning':''}"><strong>Current state:</strong> ${E(status)}<br>
+  <strong>Microsoft account:</strong> ${ready?'Signed in':fmmCloud.refreshToken?'Session can be renewed':'Sign-in required'}<br>
+  <strong>Last trusted cloud version:</strong> ${b?E(new Date(b.at).toLocaleString('en-GB')):'Not established'}<br>
+  <strong>Cloud record:</strong> ${fmmCloud.remote?.newer?'Newer copy detected':fmmCloud.conflict?'Conflict detected':b?'Known baseline':'No baseline yet'}.
+ </div>
  <div class="fmm-cloud-buttons">
- <button class="btn" type="button" data-fmm-cloud="signin">${ready?'Sign in again':'Sign in to Microsoft'}</button>
- <button class="btn" type="button" data-fmm-cloud="pull">Load from OneDrive</button>
- <button class="btn primary" type="button" data-fmm-cloud="push">Save to OneDrive</button>
+ <button class="btn" type="button" data-fmm-cloud="signin">${ready?'Switch / renew Microsoft login':'Sign in to Microsoft'}</button>
+ <button class="btn" type="button" data-fmm-cloud="check">Check OneDrive</button>
+ <button class="btn" type="button" data-fmm-cloud="pull">Load OneDrive copy</button>
+ <button class="btn primary" type="button" data-fmm-cloud="push">Save local copy to OneDrive</button>
+ <button class="btn" type="button" data-fmm-cloud="backup">Download safety backup</button>
+ ${fmmCloud.conflict?'<button class="btn" type="button" data-fmm-cloud="compare">Review conflict</button>':''}
  <button class="btn" type="button" data-fmm-cloud="logout">Disconnect</button>
  </div>
- <p class="hint">The OneDrive file is stored in <strong>Apps / FMM Operations / ${E(FMM_CLOUD_FILE)}</strong> (the folder name follows your registered app name). First load from OneDrive before saving from another device. If a second machine has changed it, upload will stop instead of overwriting those changes.</p>
- <p class="hint">This is not real-time collaborative editing. Do not edit simultaneously from multiple devices. Use full JSON/ZIP backups regularly.</p>`,
- '<button type="button" class="btn" data-close>Close</button><button type="submit" class="btn primary">Save cloud settings</button>');
- document.querySelector('#modalForm').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);const v=String(f.get('clientId')||'').trim();if(v&&!/^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i.test(v)){toast('The Microsoft application ID must be a GUID');return;}
- fmmCloud.clientId=v;fmmCloud.auto=f.has('auto');fmmCloudSaveConfig();closeModal();fmmCloudSetState();toast('Cloud settings saved');};
+ <p class="hint">The cloud database lives privately in Apps / FMM Operations / ${E(FMM_CLOUD_FILE)}. If Microsoft sign-in expires, the app first tries to renew it. A fresh sign-in may be needed roughly once a day; your local edits will be retained. This is not simultaneous multi-user editing.</p>`,
+ '<button type="button" class="btn" data-close>Close</button><button type="submit" class="btn primary">Save sync settings</button>');
+ document.querySelector('#modalForm').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);const v=String(f.get('clientId')||'').trim();
+  if(v&&!/^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i.test(v)){toast('Application ID must be a GUID');return;}
+  if(v!==fmmCloud.clientId){fmmCloud.token='';fmmCloud.refreshToken='';fmmCloud.expires=0;fmmCloud.etag=null;fmmCloud.baseline=null;fmmCloud.folderId='';fmmCloud.dirty=true;fmmCloudSaveSession();try{localStorage.removeItem(FMM_CLOUD_BASELINE);}catch(e){}}
+  fmmCloud.clientId=v;fmmCloud.auto=f.has('auto');fmmCloud.autoLoad=f.has('autoLoad');fmmCloudSaveConfig();closeModal();fmmCloudSetState();toast('OneDrive settings saved');};
 }
-const fmmCloudBytes=n=>{let a=new Uint8Array(n);crypto.getRandomValues(a);return a};
+const fmmCloudBytes=n=>{const a=new Uint8Array(n);crypto.getRandomValues(a);return a;};
 const fmmCloudBase64=b=>btoa(String.fromCharCode(...b)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
 async function fmmCloudSignIn(){
- if(!fmmCloudCanConnect()){toast('Use the HTTPS GitHub Pages address for Microsoft sign in');return;}
- if(!fmmCloud.clientId){toast('Enter and save your Microsoft Application (client) ID first');return;}
- if(!crypto.subtle){toast('Secure browser context required for Microsoft sign-in');return;}
+ if(!fmmCloudCanConnect()){toast('Open the HTTPS GitHub Pages application to sign in');return;}
+ if(!fmmCloud.clientId){toast('Enter your Microsoft Application ID in OneDrive settings first');return;}
+ if(!crypto.subtle){toast('Secure connection required');return;}
  const verifier=fmmCloudBase64(fmmCloudBytes(48)),state=fmmCloudBase64(fmmCloudBytes(24));
  const digest=new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(verifier)));
  sessionStorage.setItem('fmm-cloud-oauth-pkce',JSON.stringify({verifier,state,clientId:fmmCloud.clientId,redirect:fmmCloudRedirect(),at:Date.now()}));
- let url=new URL('https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize');
- for(const [k,v] of Object.entries({client_id:fmmCloud.clientId,response_type:'code',redirect_uri:fmmCloudRedirect(),response_mode:'query',scope:'Files.ReadWrite.AppFolder offline_access',state,code_challenge:fmmCloudBase64(digest),code_challenge_method:'S256',prompt:'select_account'}))url.searchParams.set(k,v);
- window.location.assign(url.href);
+ const u=new URL('https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize');
+ for(const [k,v] of Object.entries({client_id:fmmCloud.clientId,response_type:'code',redirect_uri:fmmCloudRedirect(),response_mode:'query',scope:FMM_CLOUD_SCOPES,state,code_challenge:fmmCloudBase64(digest),code_challenge_method:'S256',prompt:'select_account'}))u.searchParams.set(k,v);
+ window.location.assign(u.href);
+}
+function fmmCloudAcceptToken(t){
+ fmmCloud.token=t.access_token;fmmCloud.refreshToken=t.refresh_token||fmmCloud.refreshToken;
+ fmmCloud.expires=Date.now()+Math.max(60,(+t.expires_in||3600)-90)*1000;
+ fmmCloudSaveSession();
 }
 async function fmmCloudCallback(){
  const u=new URL(location.href);if(!u.searchParams.has('code')&&!u.searchParams.has('error'))return;
  const code=u.searchParams.get('code'),state=u.searchParams.get('state'),err=u.searchParams.get('error');
- u.searchParams.delete('code');u.searchParams.delete('state');u.searchParams.delete('error');u.searchParams.delete('error_description');u.searchParams.delete('session_state');
+ for(const k of ['code','state','error','error_description','session_state'])u.searchParams.delete(k);
  try{history.replaceState(null,'',u.pathname+(u.search||'')+(u.hash||''));}catch(e){}
  let saved=null;try{saved=JSON.parse(sessionStorage.getItem('fmm-cloud-oauth-pkce')||'null');}catch(e){}
  sessionStorage.removeItem('fmm-cloud-oauth-pkce');
  if(err){fmmCloudSetState('Microsoft sign-in cancelled','warn');toast('Microsoft sign-in: '+err);return;}
- if(!saved||state!==saved.state||saved.redirect!==fmmCloudRedirect()||Date.now()-saved.at>10*60*1000){fmmCloudSetState('Sign-in verification failed','warn');toast('Sign-in session expired or state mismatch. Sign in again.');return;}
+ if(!saved||state!==saved.state||saved.clientId!==fmmCloud.clientId||saved.redirect!==fmmCloudRedirect()||Date.now()-saved.at>10*60*1000){fmmCloudSetState('Sign-in verification failed','warn');toast('Microsoft sign-in verification failed; try again');return;}
  try{
-  const body=new URLSearchParams({client_id:saved.clientId,grant_type:'authorization_code',code,redirect_uri:saved.redirect,code_verifier:saved.verifier,scope:'Files.ReadWrite.AppFolder offline_access'});
-  const r=await fetch('https://login.microsoftonline.com/consumers/oauth2/v2.0/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body.toString(),cache:'no-store'});
-  const t=await r.json();if(!r.ok||!t.access_token)throw Error(t.error_description||'Token exchange failed ('+r.status+')');
-  fmmCloud.token=t.access_token;fmmCloud.expires=Date.now()+Math.max(60,(+t.expires_in||3600)-90)*1000;fmmCloud.etag=null;fmmCloud.dirty=false;
-  fmmCloudSetState('OneDrive: signed in; load or save','ok');toast('Microsoft signed in. Now load your existing OneDrive data or save this local register.');
- }catch(e){fmmCloudSetState('OneDrive sign-in failed','warn');toast('Microsoft connection failed: '+e.message);}
+  const body=new URLSearchParams({client_id:saved.clientId,grant_type:'authorization_code',code,redirect_uri:saved.redirect,code_verifier:saved.verifier,scope:FMM_CLOUD_SCOPES});
+  const r=await fetch(FMM_CLOUD_AUTH_URL,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body.toString(),cache:'no-store'});
+  const t=await r.json();if(!r.ok||!t.access_token)throw Error(t.error_description||'Microsoft token exchange failed');
+  fmmCloudAcceptToken(t);
+  // Never discard the previous trusted ETag merely because Microsoft requested a new login.
+  fmmCloudSetState('Microsoft signed in · checking OneDrive','neutral');
+  await fmmCloudCheck({afterSignIn:true});
+ }catch(e){fmmCloudSetState('Sign-in succeeded but OneDrive check failed','warn');toast(e.message);}
 }
-function fmmCloudAuth(){if(!fmmCloud.token||Date.now()>fmmCloud.expires)throw Error('Microsoft session expired; sign in again');return fmmCloud.token;}
+async function fmmCloudAuth(){
+ if(fmmCloud.token&&Date.now()<fmmCloud.expires)return fmmCloud.token;
+ if(!fmmCloud.refreshToken){fmmCloudSetState('Microsoft sign-in required · local edits retained','warn');throw Error('Microsoft session has expired. Sign in again. Your local work is safe.');}
+ if(fmmCloud.refreshPromise)return fmmCloud.refreshPromise;
+ fmmCloud.refreshPromise=(async()=>{
+  try{
+   const body=new URLSearchParams({client_id:fmmCloud.clientId,grant_type:'refresh_token',refresh_token:fmmCloud.refreshToken,scope:FMM_CLOUD_SCOPES});
+   const r=await fetch(FMM_CLOUD_AUTH_URL,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body.toString(),cache:'no-store'});
+   const t=await r.json();if(!r.ok||!t.access_token)throw Error(t.error_description||'Refresh token no longer valid');
+   fmmCloudAcceptToken(t);return fmmCloud.token;
+  }catch(e){fmmCloud.token='';fmmCloud.refreshToken='';fmmCloud.expires=0;fmmCloudSaveSession();fmmCloudSetState('Sign in required · local edits retained','warn');throw Error('Microsoft needs a fresh sign-in. Your local changes remain safe.');}
+  finally{fmmCloud.refreshPromise=null;}
+ })();return fmmCloud.refreshPromise;
+}
 async function fmmGraph(path,init={},allow404=false){
- const token=fmmCloudAuth();const h=new Headers(init.headers||{});h.set('Authorization','Bearer '+token);
- const r=await fetch('https://graph.microsoft.com/v1.0'+path,{...init,headers:h,cache:'no-store'});
+ const token=await fmmCloudAuth();const headers=new Headers(init.headers||{});headers.set('Authorization','Bearer '+token);
+ const r=await fetch('https://graph.microsoft.com/v1.0'+path,{...init,headers,cache:'no-store'});
  if(allow404&&r.status===404)return null;
- if(!r.ok){let body='';try{let j=await r.json();body=j.error?.message||j.error_description||'';}catch(e){}throw Error((body||'OneDrive Graph error')+' (HTTP '+r.status+')');}
+ if(!r.ok){let msg='';try{const j=await r.json();msg=j.error?.message||j.error_description||'';}catch(e){}
+  if(r.status===412||r.status===409){fmmCloud.conflict=true;throw Error('OneDrive file changed during save; conflict detected. Your local edits are safe.');}
+  throw Error((msg||'Microsoft Graph request failed')+' (HTTP '+r.status+')');}
  return r;
 }
-async function fmmCloudFolder(){let r=await fmmGraph('/me/drive/special/approot');let j=await r.json();if(!j.id)throw Error('OneDrive app folder not accessible');return j.id;}
-async function fmmCloudMetadata(folder){let path='/me/drive/items/'+encodeURIComponent(folder)+':/'+encodeURIComponent(FMM_CLOUD_FILE);let r=await fmmGraph(path,{},true);return r?await r.json():null;}
-async function fmmCloudDownload(){
- if(fmmCloud.working){toast('Cloud action already in progress');return;}fmmCloud.working=true;
- try{
- const folder=await fmmCloudFolder(),m=await fmmCloudMetadata(folder);
- if(!m){toast('No company data exists in OneDrive yet. Save this browser data to initialise it.');fmmCloudSetState('OneDrive: no cloud backup found','warn');return;}
- let r;
- if(m['@microsoft.graph.downloadUrl'])r=await fetch(m['@microsoft.graph.downloadUrl'],{cache:'no-store'});
- else r=await fmmGraph('/me/drive/items/'+encodeURIComponent(m.id)+'/content');
- if(!r.ok)throw Error('Cloud data download failed ('+r.status+')');
- const raw=await r.text();if(raw.length>16*1024*1024)throw Error('Cloud JSON is over 16 MB');
- const j=JSON.parse(raw);validateBackup(j);
- const current=JSON.stringify(data);const incoming=migrate(j);const next=JSON.stringify(incoming);
- if(current!==next&&!confirm('REPLACE this browser\'s jobs, quotations, costs and Gantt data with the OneDrive copy? First download a JSON backup if you have unsaved local changes.'))return;
- if(current!==next){dl(JSON.stringify({...data,backupAt:new Date().toISOString(),application:'FMM pre-cloud restore'},null,2),'FMM_Before_OneDrive_Load_'+today()+'.json');}
+async function fmmCloudFolder(){const r=await fmmGraph('/me/drive/special/approot');const j=await r.json();if(!j.id)throw Error('OneDrive application folder not found');return String(j.id);}
+async function fmmCloudMetadata(folder){const path='/me/drive/items/'+encodeURIComponent(folder)+':/'+encodeURIComponent(FMM_CLOUD_FILE);const r=await fmmGraph(path,{},true);return r?await r.json():null;}
+async function fmmCloudHash(text){const raw=new TextEncoder().encode(text);const b=await crypto.subtle.digest('SHA-256',raw);return Array.from(new Uint8Array(b)).map(x=>x.toString(16).padStart(2,'0')).join('');}
+async function fmmCloudLocalHash(){return fmmCloudHash(fmmCloudDataFingerprint());}
+function fmmCloudDownloadBackup(){dl(JSON.stringify({...data,backupAt:new Date().toISOString(),application:'FMM safety backup'},null,2),'FMM_Safety_Backup_'+today()+'.json','application/json');}
+async function fmmCloudReadRemote(m){
+ const r=m['@microsoft.graph.downloadUrl']?await fetch(m['@microsoft.graph.downloadUrl'],{cache:'no-store'}):await fmmGraph('/me/drive/items/'+encodeURIComponent(m.id)+'/content');
+ if(!r.ok)throw Error('OneDrive download failed ('+r.status+')');const raw=await r.text();if(raw.length>16*1024*1024)throw Error('Cloud backup exceeds 16 MB');
+ const j=JSON.parse(raw);validateBackup(j);return {j,raw};
+}
+async function fmmCloudApplyRemote(m,folder,silent=false){
+ const {j}=await fmmCloudReadRemote(m);const incoming=migrate(j);
+ const changed=fmmCloudDataFingerprint()!==JSON.stringify({schema:incoming.schema,sample:incoming.sample,resources:incoming.resources,absences:incoming.absences,companyCash:incoming.companyCash,projects:incoming.projects,quotations:incoming.quotations,settings:incoming.settings});
+ if(changed&&!silent&&!confirm('Replace this browser’s project, quotation, budget and Gantt records with the OneDrive copy? A safety backup will be downloaded first.'))return false;
+ if(changed&&!silent)fmmCloudDownloadBackup();
  const original=data,oldWarning=startupWarning,oldLast=lastSavedSerialized;
  data=incoming;startupWarning='';lastSavedSerialized=localStorage.getItem(STORE);fmmEnsureData();
- if(!save(true)){data=original;startupWarning=oldWarning;lastSavedSerialized=oldLast;throw Error('Local storage rejected downloaded data; your original register has been kept');}
- undoStack=[];fmmQuoteId='';fmmLinePage=0;fmmCloud.etag=m.eTag||m.etag||null;fmmCloud.lastPushed=JSON.stringify(data);fmmCloud.dirty=false;clearTimeout(fmmCloud.timer);render();
- fmmCloudSetState('OneDrive: loaded successfully','ok');toast('Company records loaded from OneDrive');
+ if(!save(true)){data=original;startupWarning=oldWarning;lastSavedSerialized=oldLast;throw Error('Browser storage rejected the cloud copy; original data retained');}
+ undoStack=[];fmmQuoteId='';fmmLinePage=0;clearTimeout(fmmCloud.timer);fmmCloud.conflict=false;fmmCloud.tabConflict=false;fmmCloud.remote=null;
+ const hash=await fmmCloudLocalHash();fmmCloudSaveBaseline(folder,m.eTag||m.etag,hash);
+ fmmCloud.dirty=false;fmmCloud.lastPushed=fmmCloudDataFingerprint();fmmCloudLastLocalData=fmmCloudDataFingerprint();render();
+ fmmCloudSetState('OneDrive: loaded and up to date','ok');if(!silent)toast('OneDrive records loaded successfully');return true;
+}
+async function fmmCloudDownload(){
+ if(fmmCloud.working){toast('Another cloud action is already running');return;}
+ fmmCloud.working=true;try{
+  const folder=await fmmCloudFolder(),m=await fmmCloudMetadata(folder);
+  if(!m){fmmCloudSetState('OneDrive: no company backup found','warn');toast('No existing OneDrive company backup');return;}
+  await fmmCloudApplyRemote(m,folder,false);
  }catch(e){fmmCloudSetState('OneDrive load failed','warn');toast('OneDrive load failed: '+e.message);}finally{fmmCloud.working=false;}
 }
-async function fmmCloudUpload(){
- if(fmmCloud.working){fmmCloud.pending=true;return;}fmmCloud.working=true;
- const snapshot=JSON.stringify(data);
+async function fmmCloudCheck({afterSignIn=false}={}){
+ if(fmmCloud.working||fmmCloud.tabConflict)return;
+ if(!fmmCloud.token&&!fmmCloud.refreshToken){fmmCloudSetState();return;}
+ fmmCloud.working=true;let pushAfter=false;
  try{
- validateBackup(data);
- const folder=await fmmCloudFolder(),m=await fmmCloudMetadata(folder);
- const etag=m?.eTag||m?.etag||null;
- if(m&&!fmmCloud.etag){throw Error('A OneDrive file already exists. Load it first before uploading, to avoid overwriting other-device changes.');}
- if(m&&etag!==fmmCloud.etag)throw Error('OneDrive changed on another device. Your local edits are safe; download JSON backup, review differences, then load the cloud copy.');
- if(!m&&fmmCloud.etag)throw Error('OneDrive file was deleted or moved. Upload stopped.');
- const headers={'Content-Type':'application/json; charset=utf-8'};
- if(m&&fmmCloud.etag)headers['If-Match']=fmmCloud.etag;
- else headers['If-None-Match']='*';
- const uri=m?'/me/drive/items/'+encodeURIComponent(m.id)+'/content':'/me/drive/items/'+encodeURIComponent(folder)+':/'+encodeURIComponent(FMM_CLOUD_FILE)+':/content';
- const payload=JSON.stringify({...data,backupAt:new Date().toISOString(),application:'FMM Operations OneDrive private store'});
- let r=await fmmGraph(uri,{method:'PUT',headers,body:payload});let result=await r.json();
- fmmCloud.etag=result.eTag||result.etag||null;
- if(!fmmCloud.etag){let mm=await fmmCloudMetadata(folder);fmmCloud.etag=mm?.eTag||mm?.etag||null;}
- fmmCloud.lastPushed=snapshot;fmmCloud.dirty=JSON.stringify(data)!==snapshot;
- fmmCloudSetState(fmmCloud.dirty?'OneDrive: newer local edits':'OneDrive: saved','ok');toast('Private OneDrive company backup saved');
- }catch(e){fmmCloud.dirty=true;fmmCloudSetState('OneDrive: unsynced local edits','warn');toast('OneDrive upload stopped: '+e.message);fmmCloud.auto=false;fmmCloudSaveConfig();}
- finally{fmmCloud.working=false;if(fmmCloud.pending){fmmCloud.pending=false;if(fmmCloud.auto&&fmmCloud.etag)fmmCloudSchedule();}}
+  const folder=await fmmCloudFolder(),m=await fmmCloudMetadata(folder),b=fmmCloud.baseline;
+  fmmCloud.folderId=folder;fmmCloud.remote=m?{etag:m.eTag||m.etag,modified:m.lastModifiedDateTime,newer:false}:null;
+  if(!m){if(b){fmmCloud.conflict=true;fmmCloudSetState('OneDrive backup missing · local records protected','warn');}else fmmCloudSetState('OneDrive: no cloud backup yet','warn');return;}
+  if(!b||b.clientId!==fmmCloud.clientId||b.folderId!==folder){
+   fmmCloud.etag=null;fmmCloudSetState('Cloud copy exists · load it once to establish sync','warn');return;
+  }
+  const currentHash=await fmmCloudLocalHash(),clean=currentHash===b.hash,remoteEtag=m.eTag||m.etag;
+  if(remoteEtag===b.etag){
+   fmmCloud.etag=b.etag;fmmCloud.conflict=false;fmmCloud.dirty=!clean;fmmCloud.remote.newer=false;
+   fmmCloudSetState(clean?'OneDrive: saved & up to date':'OneDrive: local edits not uploaded',clean?'ok':'warn');
+   if(!clean&&fmmCloud.auto&&afterSignIn)pushAfter=true;
+  }else if(clean){
+   fmmCloud.conflict=false;fmmCloud.remote.newer=true;fmmCloud.dirty=false;
+   if(fmmCloud.autoLoad&&!fmmCloudUserIsEditing()){await fmmCloudApplyRemote(m,folder,true);}
+   else fmmCloudSetState('Newer OneDrive data available · click Load','warn');
+  }else{
+   fmmCloud.conflict=true;fmmCloud.dirty=true;fmmCloud.remote.newer=true;
+   fmmCloudSetState('Conflict: local and OneDrive both changed','warn');
+   toast('Two versions changed. No upload performed. Use OneDrive sync → Review conflict.');
+  }
+ }catch(e){fmmCloudSetState('OneDrive check unavailable · local data safe','warn');if(afterSignIn)toast('OneDrive check: '+e.message);}
+ finally{fmmCloud.working=false;}
+ if(pushAfter)setTimeout(()=>{if(!fmmCloud.working&&!fmmCloud.conflict&&fmmCloud.auto)fmmCloudUpload();},0);
 }
-function fmmCloudSchedule(){fmmCloud.dirty=true;if(fmmCloud.clientId||fmmCloud.token)fmmCloudSetState('OneDrive: unsynced local edits','warn');if(!fmmCloud.auto||!fmmCloud.token||!fmmCloud.etag)return;clearTimeout(fmmCloud.timer);fmmCloud.timer=setTimeout(()=>{if(fmmCloud.token&&Date.now()<fmmCloud.expires)fmmCloudUpload();},2500);}
-function fmmCloudDisconnect(){clearTimeout(fmmCloud.timer);fmmCloud.token='';fmmCloud.expires=0;fmmCloud.etag=null;fmmCloud.pending=false;fmmCloudSetState('OneDrive: disconnected');toast('Microsoft session disconnected. Browser data remains available locally.');}
-// Preserve the legacy Operations editing flow; sync only after successful user mutations (not navigation).
+async function fmmCloudUpload(){
+ if(fmmCloud.working){fmmCloud.pending=true;return;}
+ if(fmmCloud.tabConflict||fmmCloud.conflict){fmmCloudSetState('Conflict: upload blocked','warn');toast('Resolve the sync conflict first. Local changes retained.');return;}
+ fmmCloud.working=true;let wasSaved=false;
+ try{
+  validateBackup(data);
+  const folder=await fmmCloudFolder(),m=await fmmCloudMetadata(folder),b=fmmCloud.baseline;
+  const etag=m?.eTag||m?.etag||null;
+  if(m&&(!b||b.clientId!==fmmCloud.clientId||b.folderId!==folder))throw Error('OneDrive already contains data. Load it first; do not overwrite it blindly.');
+  if(m&&etag!==b.etag){fmmCloud.conflict=true;throw Error('OneDrive changed on another device. Upload blocked. Review conflict.');}
+  if(!m&&b){fmmCloud.conflict=true;throw Error('The OneDrive company file was deleted or moved. Upload blocked.');}
+  const snapshot=fmmCloudDataFingerprint(),hash=await fmmCloudHash(snapshot);
+  const headers={'Content-Type':'application/json; charset=utf-8'};
+  if(m)headers['If-Match']=b.etag;else headers['If-None-Match']='*';
+  const uri=m?'/me/drive/items/'+encodeURIComponent(m.id)+'/content':'/me/drive/items/'+encodeURIComponent(folder)+':/'+encodeURIComponent(FMM_CLOUD_FILE)+':/content';
+  const payload=JSON.stringify({...data,backupAt:new Date().toISOString(),application:'FMM Operations OneDrive private store'});
+  const r=await fmmGraph(uri,{method:'PUT',headers,body:payload});const res=await r.json();
+  let newEtag=res.eTag||res.etag;
+  if(!newEtag){const refreshed=await fmmCloudMetadata(folder);newEtag=refreshed?.eTag||refreshed?.etag;}
+  if(!newEtag)throw Error('Upload returned no ETag; re-check OneDrive before editing again');
+  fmmCloudSaveBaseline(folder,newEtag,hash);fmmCloud.remote={etag:newEtag,newer:false};
+  fmmCloud.lastPushed=snapshot;fmmCloud.dirty=fmmCloudDataFingerprint()!==snapshot;wasSaved=true;
+  fmmCloudSetState(fmmCloud.dirty?'OneDrive: newer local edits':'OneDrive: saved & up to date',fmmCloud.dirty?'warn':'ok');toast('Private OneDrive backup saved');
+ }catch(e){fmmCloud.dirty=true;fmmCloudSetState(fmmCloud.conflict?'OneDrive conflict · no data overwritten':'OneDrive: local edits not uploaded','warn');toast('OneDrive upload stopped: '+e.message);}
+ finally{fmmCloud.working=false;if(fmmCloud.pending){fmmCloud.pending=false;if(wasSaved&&fmmCloud.auto&&!fmmCloud.conflict)fmmCloudSchedule();}}
+}
+function fmmCloudSchedule(){
+ fmmCloud.dirty=true;fmmCloudSetState();
+ if(!fmmCloud.auto||fmmCloud.working||fmmCloud.conflict||fmmCloud.tabConflict||!fmmCloud.baseline)return;
+ clearTimeout(fmmCloud.timer);fmmCloud.timer=setTimeout(()=>{if(!fmmCloud.conflict&&fmmCloud.auto)fmmCloudUpload();},3000);
+}
+function fmmCloudDisconnect(){
+ clearTimeout(fmmCloud.timer);fmmCloud.token='';fmmCloud.refreshToken='';fmmCloud.expires=0;fmmCloudSaveSession();
+ fmmCloudSetState('OneDrive disconnected · local data retained','warn');toast('Signed out locally. Reconnect to check the cloud copy.');
+}
+async function fmmCloudConflictReview(){
+ if(fmmCloud.working)return;fmmCloud.working=true;
+ try{
+  const folder=await fmmCloudFolder(),m=await fmmCloudMetadata(folder);
+  if(!m)throw Error('Cloud backup was not found. Keep your local JSON backup.');
+  const {j}=await fmmCloudReadRemote(m);const remote=migrate(j);
+  const a=data.projects||[],b=remote.projects||[];
+  const aMap=new Map(a.map(p=>[p.id,JSON.stringify(p)])),bMap=new Map(b.map(p=>[p.id,JSON.stringify(p)]));
+  const changed=[...new Set([...aMap.keys(),...bMap.keys()])].filter(id=>aMap.get(id)!==bMap.get(id));
+  modal('Review OneDrive conflict',`<div class="note warning"><strong>Both this browser and OneDrive have changed.</strong> No version has been overwritten. Keep a JSON backup of each version before choosing which one to keep.</div>
+   <table class="table"><tbody><tr><td>Projects in this browser</td><td>${a.length}</td></tr><tr><td>Projects in OneDrive</td><td>${b.length}</td></tr>
+   <tr><td>Project records differing</td><td>${changed.length}</td></tr><tr><td>Quotations in browser</td><td>${(data.quotations||[]).length}</td></tr><tr><td>Quotations in OneDrive</td><td>${(remote.quotations||[]).length}</td></tr></tbody></table>
+   <p class="hint">This comparison counts differing project records; it does not automatically merge line items or schedules. Choosing OneDrive will replace browser data after downloading a local safety backup. Choosing this browser will replace the OneDrive file after downloading a cloud safety backup and two confirmations.</p>
+   <div class="fmm-cloud-buttons"><button type="button" class="btn" data-fmm-cloud="backup">Back up this browser</button><button type="button" class="btn" data-fmm-cloud="remotebackup">Back up OneDrive</button>
+   <button type="button" class="btn" data-fmm-cloud="pull">Use OneDrive version</button><button type="button" class="btn" data-fmm-cloud="force">Use this browser as master</button></div>`,
+   '<button type="button" class="btn" data-close>Cancel</button>');
+ }catch(e){toast('Conflict review unavailable: '+e.message);}finally{fmmCloud.working=false;}
+}
+async function fmmCloudRemoteBackup(){
+ try{const folder=await fmmCloudFolder(),m=await fmmCloudMetadata(folder);if(!m)throw Error('No OneDrive backup found');
+ const {raw}=await fmmCloudReadRemote(m);dl(raw,'FMM_OneDrive_Before_Conflict_Resolution_'+today()+'.json','application/json');toast('OneDrive safety backup downloaded');}
+ catch(e){toast('Cloud backup could not be downloaded: '+e.message);}
+}
+async function fmmCloudUseLocalAsMaster(){
+ if(fmmCloud.working)return;
+ if(!confirm('You are about to REPLACE the OneDrive copy with this browser’s data. Have you backed up both versions?'))return;
+ if(!confirm('Final confirmation: replace the newer OneDrive company database? This will discard the remote changes unless they are in your backup.'))return;
+ fmmCloud.working=true;
+ try{
+  const folder=await fmmCloudFolder(),m=await fmmCloudMetadata(folder);if(!m)throw Error('OneDrive backup missing. No replacement performed.');
+  // Preserve the current cloud version before any destructive operation.
+  const {raw}=await fmmCloudReadRemote(m);dl(raw,'FMM_OneDrive_Pre_Replacement_'+today()+'.json','application/json');
+  const snapshot=fmmCloudDataFingerprint(),hash=await fmmCloudHash(snapshot),payload=JSON.stringify({...data,backupAt:new Date().toISOString(),application:'FMM Operations approved conflict resolution'});
+  const r=await fmmGraph('/me/drive/items/'+encodeURIComponent(m.id)+'/content',{method:'PUT',headers:{'Content-Type':'application/json; charset=utf-8','If-Match':m.eTag||m.etag},body:payload});
+  const j=await r.json();let tag=j.eTag||j.etag;if(!tag){const updated=await fmmCloudMetadata(folder);tag=updated?.eTag||updated?.etag;}
+  if(!tag)throw Error('Could not verify new cloud version');
+  fmmCloudSaveBaseline(folder,tag,hash);fmmCloud.conflict=false;fmmCloud.remote={etag:tag,newer:false};fmmCloud.dirty=fmmCloudDataFingerprint()!==snapshot;
+  fmmCloudSetState('OneDrive: approved local version saved','ok');toast('Your browser copy is now the OneDrive master.');
+ }catch(e){fmmCloudSetState('Conflict remains · local work retained','warn');toast('Cloud replacement stopped: '+e.message);}
+ finally{fmmCloud.working=false;}
+}
 const fmmMutateBeforeCloud=mutate;
-mutate=function(...args){const ok=fmmMutateBeforeCloud(...args);if(ok)fmmCloudSchedule();return ok;};
-// Add cloud controls to the existing header without changing any project/quotation records.
+// v2.4 save() watcher continues to capture imports, edits, restores, and undo.
 const fmmCloudButton=document.createElement('button');fmmCloudButton.type='button';fmmCloudButton.className='btn';fmmCloudButton.setAttribute('data-action','cloudSync');fmmCloudButton.textContent='☁ OneDrive sync';
 const fmmCloudStatus=document.createElement('span');fmmCloudStatus.id='fmmCloudState';fmmCloudStatus.className='fmm-cloud-status';
 const fmmHeaderActions=document.querySelector('.top .actions');if(fmmHeaderActions)fmmHeaderActions.prepend(fmmCloudButton);
 const fmmTopTitle=document.querySelector('.top > div:first-child');if(fmmTopTitle)fmmTopTitle.appendChild(fmmCloudStatus);
-// Browser links are deliberate user actions; cloud upload never executes merely because a modal opens.
-document.addEventListener('click',e=>{const n=e.target.closest('[data-fmm-cloud]');if(!n)return;e.preventDefault();e.stopImmediatePropagation();const command=n.dataset.fmmCloud;closeModal();if(command==='signin')fmmCloudSignIn().catch(err=>toast('Sign-in could not start: '+err.message));else if(command==='pull')fmmCloudDownload();else if(command==='push')fmmCloudUpload();else if(command==='logout')fmmCloudDisconnect();},true);
+document.addEventListener('click',e=>{const n=e.target.closest('[data-fmm-cloud]');if(!n)return;e.preventDefault();e.stopImmediatePropagation();const command=n.dataset.fmmCloud;closeModal();
+ if(command==='signin')fmmCloudSignIn().catch(err=>toast('Microsoft sign-in could not start: '+err.message));
+ else if(command==='pull')fmmCloudDownload();else if(command==='push')fmmCloudUpload();
+ else if(command==='check')fmmCloudCheck({});else if(command==='logout')fmmCloudDisconnect();
+ else if(command==='backup')fmmCloudDownloadBackup();else if(command==='remotebackup')fmmCloudRemoteBackup();
+ else if(command==='compare')fmmCloudConflictReview();else if(command==='force')fmmCloudUseLocalAsMaster();
+},true);
+function fmmCloudUserIsEditing(){const a=document.activeElement;const modalRoot=document.querySelector('#modalroot');return !!(modalRoot&&!modalRoot.classList.contains('hidden'))||!!(a&&a.matches&&a.matches('input,textarea,select,[contenteditable=\"true\"]'));}
+function fmmCloudPoll(){if(!document.hidden&&(fmmCloud.token||fmmCloud.refreshToken)&&!fmmCloud.working)fmmCloudCheck({});}
+window.addEventListener('focus',()=>{fmmCloudPoll();});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)fmmCloudPoll();});
+setInterval(()=>{fmmCloudPoll();},60000);
 // Includes default print action on costing & quotation views. Gantt print retains dedicated client/internal settings.
 const fmmOldActionBeforeCloud=handleAction;
 handleAction=function(action,el){if(action==='cloudSync'){fmmCloudModal();return;}
@@ -1277,11 +1436,11 @@ generateProgrammePrint=function(opts){if(opts.scope==='portfolio'){
 const fmmFullExportOriginal=exportAll;
 exportAll=function(){return fmmFullExportOriginal();};
 // Expose non-secret health metadata for testing and diagnostics.
-window.FMMCompany.version='2.3.0';
+window.FMMCompany.version='2.5.0';
 window.FMMCompany.cloudStatus=()=>({connected:!!fmmCloud.token&&Date.now()<fmmCloud.expires,hasBaseline:!!fmmCloud.etag,automatic:fmmCloud.auto,dirty:fmmCloud.dirty,publicRepository:FMM_GITHUB_REPO,privateFile:FMM_CLOUD_FILE});
 window.FMMCompany.printCostReport=fmmPrintReport;
 window.FMMCompany.connectOneDrive=fmmCloudModal;
-if(document.querySelector('.brand small'))document.querySelector('.brand small').textContent='FMM OPERATIONS · V2.3';
+if(document.querySelector('.brand small'))document.querySelector('.brand small').textContent='FMM OPERATIONS · V2.5';
 if(document.querySelector('.sidefoot'))document.querySelector('.sidefoot').innerHTML='Application source: GitHub.<br><strong>Company records: private OneDrive or this browser.</strong><br>Export JSON and ZIP backups regularly.<br>Cloud changes require sync confirmation.<br><button class="btn small" style="margin-top:9px" data-action="recover">Restore checkpoint</button>';
 fmmCloudSetState();
 fmmCloudCallback();
@@ -1306,8 +1465,13 @@ save=function(...args){
 // The save() observer above now covers mutation and restores; avoid duplicate scheduling.
 mutate=fmmMutateBeforeCloud;
 // Recognise external-tab changes so the visible cloud indicator cannot incorrectly say 'saved'.
-window.addEventListener('storage',e=>{if(e.key===STORE&&e.newValue){const now=fmmCloudDataFingerprint();if(now!==fmmCloudLastLocalData){fmmCloudLastLocalData=now;fmmCloudSchedule();}}});
-window.FMMCompany.version='2.4.0';
-if(document.querySelector('.brand small'))document.querySelector('.brand small').textContent='FMM OPERATIONS · V2.4';
+window.addEventListener('storage',e=>{if(e.key===STORE&&e.newValue&&e.newValue!==lastSavedSerialized){fmmCloud.tabConflict=true;clearTimeout(fmmCloud.timer);fmmCloudSetState('Another browser tab changed local data · reload before editing','warn');}});
+window.FMMCompany.version='2.5.0';
+window.FMMCompany.cloudStatus=()=>({connected:!!fmmCloud.token&&Date.now()<fmmCloud.expires,canRenew:!!fmmCloud.refreshToken,hasBaseline:!!fmmCloud.baseline,automaticUpload:fmmCloud.auto,automaticSafeLoad:fmmCloud.autoLoad,dirty:fmmCloud.dirty,conflict:fmmCloud.conflict,tabConflict:fmmCloud.tabConflict,etag:fmmCloud.etag,privateFile:FMM_CLOUD_FILE});
+window.FMMCompany.checkOneDrive=()=>fmmCloudCheck({});
+if(document.querySelector('.brand small'))document.querySelector('.brand small').textContent='FMM OPERATIONS · V2.5';
+// After page load, check the cloud state if this tab already has a valid/renewable session.
+setTimeout(()=>{if(fmmCloud.token||fmmCloud.refreshToken)fmmCloudCheck({});else fmmCloudSetState();},400);
+
 
 </script></body></html>
