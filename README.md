@@ -1,4 +1,18 @@
-# FMM Operations v2.6
+# FMM Operations v2.6.1
+
+## v2.6.1 status and archive hotfix
+
+- Edit a project's **Status** directly from Projects & Budgets, Master programme, Individual project, Project hub, or the current-project sidebar. The full Edit Project form also uses the same archive transition.
+- Choosing **Completed** asks for confirmation, then changes the project status and archive timestamp in **one atomic save**. It immediately appears in Completed archive.
+- Reopening an archived project through the status dropdown or **Restore** returns it to **Active/current projects** without losing records.
+- Older Completed jobs which have no archive timestamp are **not moved silently**: Projects & Budgets offers **Archive completed projects** when applicable.
+- Archive table has a dedicated Status column. Outstanding invoices, cost items and tasks are not marked finished or paid automatically.
+- Database schema, imported records and OneDrive settings remain unchanged.
+
+**Safe upgrade:** use **Backup all** before refreshing the live site; confirm **V2.6.1** in the sidebar; check one project using the inline dropdown; use the older-completed-project banner only if appropriate; save to OneDrive and check the other browser.
+
+Previous code remains in the `backup/v2.6-pre-status-hotfix` branch.
+
 
 **Fix & Mend Medway** — browser-based, local-first quotation, job budgeting, scheduling, resources, cashflow and project archive software.
 
