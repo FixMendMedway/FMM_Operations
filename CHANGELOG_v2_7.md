@@ -5,3 +5,5 @@
 **Preserved** all v2.6.1 project, quotation, Gantt, resource, search, archive, OneDrive conflict protection, JSON backup and legacy export functions. No QuickBooks integration, invoice generation, payment collection or accounting integration added.
 
 **Safety** all new data stored as keyed arrays in existing private company JSON; cross-browser users must update both browsers to v2.7 before new records. Backup first. Automatic upload is snapshot-based, not concurrent multi-user editing.
+
+**Publication note (6 November 2026):** A Pages deployment timed out in GitHub's deployment queue after the application build succeeded. This documentation-only commit retriggers publishing without changing application code or private company data.
