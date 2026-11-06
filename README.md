@@ -1,31 +1,31 @@
-# FMM Operations v2.8 — Business Overview
+# FMM Operations v2.8.1 — Continuity and OneDrive safety
 
-[Open the live application](https://fixmendmedway.github.io/FMM_Operations/)
+Live app: https://fixmendmedway.github.io/FMM_Operations/
 
-v2.8 is a clarity-first interface overhaul of FMM Operations v2.7. It keeps the Fix & Mend Medway slate/lime theme, existing records, quotation and costing formulas, mileage logs, programme, archives and Microsoft OneDrive sync unchanged.
+## Maintenance changes
 
-## What changed
+- **Critical:** OneDrive change detection now includes all seven operational registers introduced in v2.7: mileage, labour, expenses, variations, site notes, document links and job templates. Previously a change affecting only these arrays could escape automatic syncing or conflict checks.
+- OneDrive's remote replacement comparison now covers those registers as well; a manual replacement is not silently accepted just because projects/quotes have not changed.
+- Readiness alerts open the corresponding project's Readiness page. Resource-clash alerts open Resources & clashes.
+- Complete ZIP exports contain **21 files**: a full JSON restore backup, the existing CSV summaries and additional CSVs for mileage, labour, materials/business costs, variations, notes, document links and templates.
+- Consistent v2.8.1 version text in the document title and branding.
+- **No company database schema changes**, accounting integrations, invoices, payment documents or changes to quotation formulas.
 
-- **One business dashboard:** current projects, leads/unconverted quotations, issues needing attention and business mileage. All headline figures open their underlying records.
-- **Click-through home:** projects, dates, status, upcoming tasks, warnings and recent entries have full-row drill-down, not tiny links.
-- **Project detail drawer:** overview, budget & itemised cost lines, programme, site/job records, mileage. Open the original editing form or specialist module when needed. Reading details does not edit data.
-- **Simpler navigation:** main work areas are visible; planning and history are grouped. Click the logo to return home. Global search retains Ctrl+K. Export, backup, import, print and New quote are grouped under **Tools**.
-- **Responsive layouts:** desktop and mobile, with the existing mobile section selector retained.
+## Required safe upgrade
 
-All 11 existing modules remain accessible. This release adds **no new data fields, accounting integrations, invoicing, payment processing or financial documents**.
+1. Before refreshing the current app, select **Backup all** in Firefox and Edge, keeping separate private JSON backups.
+2. Decide which browser holds your newest changes. If it has unsynchronised mileage or job records, **Save to OneDrive manually** from that browser. Stop and review if a conflict is reported.
+3. Open v2.8.1 in both browsers. Do not upload old v2.8 snapshots after switching.
+4. The stricter sync fingerprint may initially display **local edits not uploaded**, even where the previous version reported saved. In the master browser, check that the OneDrive ETag is still trusted, then manually **Save to OneDrive** to establish the upgraded baseline. Do not select Load if the local browser has newer entries.
+5. Load from OneDrive in the second updated browser. Verify a mileage entry and a site note, then make another dated backup.
+6. Edit from **one browser at a time**. OneDrive snapshot sync is not live collaboration.
 
-## Safe upgrade
+## Verification
 
-1. In v2.7 select **Backup all** and save the private JSON outside GitHub.
-2. Check that the newest browser data has been saved to OneDrive; do not edit in two browsers concurrently.
-3. After a successful GitHub Pages deployment, refresh https://fixmendmedway.github.io/FMM_Operations/ and confirm **FMM OPERATIONS · V2.8** in the sidebar.
-4. Open the dashboard metrics, project detail tabs and mileage entry. Confirm job names, quotations and costs match v2.7.
-5. Test one controlled edit, Save to OneDrive, then Load from OneDrive in a second v2.8 browser. Take a fresh dated JSON backup.
+88 automated checks passed across pure JS business logic with synthetic fixtures, mocked Microsoft Graph, simulated form saves, and static UI/source inspections. ZIP generation and 21-member archive integrity were separately verified.
 
-## Important limits
+**Limits:** Managed Chromium policy prevented launching local test pages. Real visual browser interaction, Microsoft sign-in and physical printer output were not exercised; a short live acceptance test is still necessary.
 
-- Company data remains in private OneDrive app-folder JSON and browser storage; GitHub stores **public code only**.
-- No database schema migration. App deploy does not alter OneDrive company data.
-- OneDrive is still a single-writer snapshot sync using conditional ETags, not real-time collaborative editing. Keep dated backups.
-- Automated interface tests used synthetic records and stubbed browser storage. Real Microsoft sign-in, two-browser sync and physical printing remain final user acceptance checks.
-- Older app available at `backup/v2.7-before-v2.8`. Rolling back code does not roll back data.
+Rollback source: `backup/v2.8-before-v2.8.1-audit`. Rolling back code does not undo OneDrive data changes. Public GitHub contains no company data.
+
+For background on tax-year mileage estimates, see https://www.gov.uk/simpler-income-tax-simplified-expenses/vehicles.
